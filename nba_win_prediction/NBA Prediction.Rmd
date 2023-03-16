@@ -1,0 +1,375 @@
+---
+title: "NBA Games Project"
+author: "Gareth Bennett"
+date: "2023-03-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+devtools::install_github("abresler/nbastatR")
+library(nbastatR)
+library(tidyverse)
+library(zoo) #rolling average
+library(stringr)
+library(xgboost)
+library(ParBayesianOptimization)
+
+```
+2000-2023 season game records
+```{r}
+all_games_df<-game_logs(
+  seasons = c(2000:2023),
+  league = "NBA",
+  result_types = "team",
+  season_types = "Regular Season",
+  nest_data = F,
+  assign_to_environment = TRUE,
+  return_message = TRUE
+)
+
+na.omit(all_games_df)
+```
+Game Logs
+```{r}
+games_df<-game_logs(
+  seasons = 2023,
+  league = "NBA",
+  result_types = "team",
+  season_types = "Regular Season",
+  nest_data = F,
+  assign_to_environment = TRUE,
+  return_message = TRUE
+)
+
+games<-select(games_df,nameTeam, idGame,dateGame,slugMatchup,outcomeGame,plusminusTeam)%>%
+  arrange(dateGame)
+
+str(games)
+```
+
+Engineer team performance metric
+```{r}
+#Rolling average of plusminus score, 30 games before the current matchup
+games<-games%>%
+  group_by(nameTeam)%>%
+  mutate(avg_30_pm = rollapply(data = plusminusTeam, 
+                          width = 31, 
+                          FUN = function(x) mean(x[-31], na.rm = TRUE), 
+                          align = "right", 
+                          fill = NA))
+# Home Advantage feature
+away<-filter(games, str_detect(slugMatchup, paste("@", collapse="|")))
+home<-filter(games, str_detect(slugMatchup, paste("vs", collapse="|")))
+
+merge_games<-full_join(home,away,by='idGame',suffix = c("_home", "_away"))
+
+# Comparison of plusminus between matchups
+
+merge_games<-merge_games%>%
+  mutate(avg_30_pm_diff = avg_30_pm_home - avg_30_pm_away)
+
+# select outcome and plusminus diff for predicting home team outcome
+model_games <- select(merge_games, outcomeGame_home, avg_30_pm_diff)%>%
+  drop_na()
+
+#change outcome into numerical (1,0)
+model_games<- mutate(model_games,outcomeGame_home = recode(outcomeGame_home, W=1, L=0))
+```
+
+```{r}
+
+#split model into train/test set
+
+shuffle = function(X){
+  new.order = sample.int(length(X))
+  new.X = X[new.order]
+  return(new.X)
+}
+
+set.seed(245814)
+# Split data into train and test sets (75%/25%)
+n = nrow(model_games)
+n.train = floor(n * 0.75) #round down
+n.valid = n - n.train
+groups = c(rep(1, times = n.train), rep(2, times = n.valid))
+groups.shuffle = shuffle(groups)
+data.train = model_games[groups.shuffle == 1,]
+data.valid = model_games[groups.shuffle == 2,]
+
+# Put data into matrix and then xgb.DMatrix 
+x.train = as.matrix(data.train$avg_30_pm_diff)
+y.train = as.matrix(data.train$outcomeGame_home)
+dtrain = xgb.DMatrix(data=x.train,label=y.train)
+x.valid = as.matrix(data.valid$avg_30_pm_diff)
+y.valid = as.matrix(data.valid$outcomeGame_home)
+
+## Tune hyper Parameters
+
+#library(ParBayesianOptimization)
+
+Folds <- list(
+    Fold1 = as.integer(seq(1,nrow(dtrain),by = 3))
+  , Fold2 = as.integer(seq(2,nrow(dtrain),by = 3))
+  , Fold3 = as.integer(seq(3,nrow(dtrain),by = 3))
+)
+
+scoringFunction <- function(max_depth, min_child_weight, subsample,eta) {
+  
+  Pars <- list( 
+      booster = "gbtree"
+    , eta = eta
+    , max_depth = max_depth
+    , min_child_weight = min_child_weight
+    , subsample = subsample
+    , objective = "binary:logistic"
+    , eval_metric = "auc"
+  )
+
+  xgbcv <- xgb.cv(
+      params = Pars
+    , data = dtrain
+    , nround = 100
+    , folds = Folds
+    , prediction = TRUE
+    , showsd = TRUE
+    , early_stopping_rounds = 5
+    , maximize = TRUE
+            , verbose = 0)
+
+  return(
+    list( 
+        Score = max(xgbcv$evaluation_log$test_auc_mean)
+      , nrounds = xgbcv$best_iteration
+    )
+  )
+}
+
+
+bounds <- list( 
+    max_depth = c(2L,10L)
+  , min_child_weight = c(1, 25)
+  , subsample = c(0.25, 1),
+  eta = c(0.0001,0.5)
+)
+
+optObj <- bayesOpt(
+    FUN = scoringFunction
+  , bounds = bounds
+  , initPoints = 5
+  , iters.n = 3
+)
+
+getBestPars(optObj)
+
+```
+Max Depth : 5
+ETA : 0.3814
+Min Child Weight : 17.66
+Subsample : 0.904
+
+```{r}
+
+# train model 
+xg_game<-xgboost(data = dtrain,max_depth=5,eta=0.3814,min_child_weight = 17.66,subsample = 0.904,nrounds=10000,
+               objective = "binary:logistic",early_stopping_rounds = 50, verbose = 2)
+
+# fit test data to model
+pred<-predict(xg_game,x.valid)
+
+print(head(pred))
+
+#transform win probabilities into binary
+prediction<- as.numeric(pred>0.5)
+print(head(prediction))
+
+# Measure model performance 
+get.MSPE = function(Y, Y.hat){
+  return(mean((Y - Y.hat)^2))
+}
+
+get.MSPE(y.valid,prediction)
+```
+
+Mean Square Prediction Error = 0.472
+On average this model predicted the correct outcome 52.78% of the time
+
+We might be able to improve the model's accuracy by including more variables 
+to predict Win/Loss outcome. Back to back games are usually seen as a negative 
+factor for a teams performance.
+
+```{r}
+# New facet label names for supp variable
+game.labs <- c(`FALSE`="Not B2B", 
+               `TRUE`="B2B")
+
+ggplot(na.omit(all_games_df),aes(x=outcomeGame))+
+         geom_bar(aes(fill = outcomeGame))+ 
+         facet_grid(.~isB2BSecond,
+                    labeller = as_labeller(game.labs))+
+         scale_fill_manual(
+          values = c("darkRed", "dark Green"),
+          name = "Outcome", labels = c("Win","Loss"))
+```
+Using data from 2000:2023, we can see that Back to back games, while not as common,
+have a higher number of losses than wins while non-back to back games have a 
+higher number of wins than losses.
+
+We will refit the model using B2BSecond (second game of a back to back set) as an
+additional explanatory variable
+
+```{r}
+games_b2b<-select(games_df,nameTeam, idGame,dateGame,slugMatchup,outcomeGame,plusminusTeam,isB2BSecond)%>%
+  arrange(dateGame)
+
+str(games)
+```
+
+Engineer team performance metric
+```{r}
+#Rolling average of plusminus score, 30 games before the current matchup
+games_b2b<-games_b2b%>%
+  group_by(nameTeam)%>%
+  mutate(avg_30_pm = rollapply(data = plusminusTeam, 
+                          width = 31, 
+                          FUN = function(x) mean(x[-31], na.rm = TRUE), 
+                          align = "right", 
+                          fill = NA))
+# Home Advantage feature
+away<-filter(games_b2b, str_detect(slugMatchup, paste("@", collapse="|")))
+home<-filter(games_b2b, str_detect(slugMatchup, paste("vs", collapse="|")))
+
+merge_games_b2b<-full_join(home,away,by='idGame',suffix = c("_home", "_away"))
+
+# Comparison of plusminus between matchups
+
+merge_games_b2b<-merge_games_b2b%>%
+  mutate(avg_30_pm_diff = avg_30_pm_home - avg_30_pm_away)
+
+# select outcome and plusminus diff for predicting home team outcome
+model_games_b2b <- select(merge_games_b2b, outcomeGame_home, avg_30_pm_diff,isB2BSecond_home,isB2BSecond_away)%>%
+  drop_na()
+
+#change outcome into numerical (1,0)
+model_games_b2b<- mutate(model_games_b2b,outcomeGame_home = recode(outcomeGame_home, W=1, L=0))
+```
+
+
+```{r}
+#split model into train/test set
+
+
+set.seed(245814)
+
+shuffle = function(X){
+  new.order = sample.int(length(X))
+  new.X = X[new.order]
+  return(new.X)
+}
+# Split data into train and test sets (75%/25%)
+n = nrow(model_games_b2b)
+n.train = floor(n * 0.75) #round down
+n.valid = n - n.train
+groups = c(rep(1, times = n.train), rep(2, times = n.valid))
+groups.shuffle = shuffle(groups)
+data.train_b2b = model_games_b2b[groups.shuffle == 1,]
+data.valid_b2b = model_games_b2b[groups.shuffle == 2,]
+
+# Put data into matrix and then xgb.DMatrix 
+x.train_b2b = as.matrix(select(data.train_b2b,avg_30_pm_diff,isB2BSecond_away,isB2BSecond_home))
+y.train_b2b = as.matrix(data.train_b2b$outcomeGame_home)
+dtrain_b2b = xgb.DMatrix(data=x.train_b2b,label=y.train_b2b)
+x.valid_b2b = as.matrix(select(data.valid_b2b,avg_30_pm_diff,isB2BSecond_away,isB2BSecond_home))
+y.valid_b2b = as.matrix(data.valid_b2b$outcomeGame_home)
+
+## Tune hyper Parameters
+#library(ParBayesianOptimization)
+
+Folds <- list(
+    Fold1 = as.integer(seq(1,nrow(dtrain_b2b),by = 3))
+  , Fold2 = as.integer(seq(2,nrow(dtrain_b2b),by = 3))
+  , Fold3 = as.integer(seq(3,nrow(dtrain_b2b),by = 3))
+)
+
+scoringFunction <- function(max_depth, min_child_weight, subsample,eta) {
+  
+  Pars <- list( 
+      booster = "gbtree"
+    , eta = eta
+    , max_depth = max_depth
+    , min_child_weight = min_child_weight
+    , subsample = subsample
+    , objective = "binary:logistic"
+    , eval_metric = "auc"
+  )
+
+  xgbcv <- xgb.cv(
+      params = Pars
+    , data = dtrain_b2b
+    , nround = 100
+    , folds = Folds
+    , prediction = TRUE
+    , showsd = TRUE
+    , early_stopping_rounds = 5
+    , maximize = TRUE
+            , verbose = 0)
+
+  return(
+    list( 
+        Score = max(xgbcv$evaluation_log$test_auc_mean)
+      , nrounds = xgbcv$best_iteration
+    )
+  )
+}
+
+
+bounds <- list( 
+    max_depth = c(2L,10L)
+  , min_child_weight = c(1, 25)
+  , subsample = c(0.25, 1),
+  eta = c(0.0001,0.5)
+)
+
+optObj <- bayesOpt(
+    FUN = scoringFunction
+  , bounds = bounds
+  , initPoints = 5
+  , iters.n = 3
+)
+
+getBestPars(optObj)
+
+```
+Max Depth : 9
+ETA :0.09406006
+Min Child Weight : 15.6273
+Subsample : 0.5924284
+
+```{r}
+
+# train model 
+xg_game_b2b<-xgboost(data = dtrain_b2b,max_depth=9,eta=0.09406006,min_child_weight = 15.6273,subsample = 0.5924284,nrounds=10000,
+               objective = "binary:logistic",early_stopping_rounds = 50, verbose = 2)
+
+pred_b2b<-predict(xg_game_b2b,x.valid_b2b)
+
+print(head(pred_b2b))
+
+#transform win probabilities into binary
+prediction_b2b<- as.numeric(pred_b2b>0.5)
+print(head(prediction_b2b))
+
+# Measure model performance 
+get.MSPE = function(Y, Y.hat){
+  return(mean((Y - Y.hat)^2))
+}
+
+get.MSPE(y.valid_b2b,prediction_b2b)
+```
+
+Mean Square Prediction Error = 0.397
+On average this model predicted the correct outcome 60.3% of the time which is a
+significant increase over the previous model
