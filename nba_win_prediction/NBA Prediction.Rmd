@@ -169,8 +169,9 @@ Subsample : 0.904
 ```{r}
 
 # train model 
-xg_game<-xgboost(data = dtrain,max_depth=5,eta=0.3814,min_child_weight = 17.66,subsample = 0.904,nrounds=10000,
-               objective = "binary:logistic",early_stopping_rounds = 50, verbose = 2)
+xg_game<-xgboost(data = dtrain,max_depth=5,eta=0.3814,min_child_weight = 17.66,
+                 subsample = 0.904,nrounds=10000,objective = "binary:logistic",
+                 early_stopping_rounds = 50, verbose = 2)
 
 # fit test data to model
 pred<-predict(xg_game,x.valid)
@@ -340,8 +341,9 @@ Subsample : 0.5924284
 ```{r}
 set.seed(245814)
 # train model 
-xg_game_b2b<-xgboost(data = dtrain_b2b,max_depth=9,eta=0.09406006,min_child_weight = 15.6273,subsample = 0.5924284,nrounds=10000,
-               objective = "binary:logistic",early_stopping_rounds = 50, verbose = 2)
+xg_game_b2b<-xgboost(data = dtrain_b2b,max_depth=9,eta=0.09406006,min_child_weight = 15.6273,
+                     subsample = 0.5924284,nrounds=10000,objective = "binary:logistic",
+                     early_stopping_rounds = 50, verbose = 2)
 
 # fit test data to model
 pred_b2b<-predict(xg_game_b2b,x.valid_b2b)
@@ -364,6 +366,7 @@ On average this model predicted the correct outcome 60.3% of the time which is a
 significant increase over the previous model
 
 
+Setup compatible dataframe of new matchup data (2023-03-17)
 ```{r}
 
 sch<-current_schedule()
@@ -371,36 +374,38 @@ sch<-current_schedule()
 # add B2B variable
 sch<-gather(sch,key="location",value = "nameTeam",nameTeamHome,nameTeamAway)
 
-
-
 sch<-sch%>%
   group_by(nameTeam) %>%
   arrange(dateGame)%>%
-mutate(numberGameTeamSeason = 1:n(),
+  mutate(
+       numberGameTeamSeason = 1:n(),
+       
        countDaysRestTeam = ifelse(numberGameTeamSeason > 1,
-                                     (dateGame - lag(dateGame) - 1),
-                                     120),
-countDaysNextGameTeam =
-            ifelse(numberGameTeamSeason < 82,
-                   ((
-                     lead(dateGame) - dateGame
-                   ) - 1),
-                   120)) %>%
-        mutate(
-          countDaysNextGameTeam = countDaysNextGameTeam %>% as.numeric(),
-          countDaysRestTeam = countDaysRestTeam %>% as.numeric(),
-          isB2B = ifelse(countDaysNextGameTeam == 0 |
+                              (dateGame - lag(dateGame) - 1),120),
+       
+       countDaysNextGameTeam = ifelse(numberGameTeamSeason < 82,
+                   ((lead(dateGame) - dateGame) - 1),120)
+       ) %>%
+  mutate(
+        countDaysNextGameTeam = countDaysNextGameTeam %>% as.numeric(),
+        
+        countDaysRestTeam = countDaysRestTeam %>% as.numeric(),
+        
+        isB2B = ifelse(countDaysNextGameTeam == 0 |
                            countDaysRestTeam == 0, TRUE, FALSE)
         ) %>%
-        mutate(
-          isB2BFirst = ifelse(lead(countDaysNextGameTeam) == 0, TRUE, FALSE),
-          isB2BSecond = ifelse(lag(countDaysNextGameTeam) == 0, TRUE, FALSE)) %>%
-        ungroup()%>%
-  mutate(plusminusTeam=NA,outcomeGame_home=NA)
-
-next_games<- sch%>%
-  select(nameTeam,idGame,dateGame,slugTeams,location,isB2BSecond,plusminusTeam,outcomeGame)%>%
-  filter(dateGame==today())
+  mutate(
+        isB2BFirst = ifelse(lead(countDaysNextGameTeam) == 0, TRUE, FALSE),
+        
+        isB2BSecond = ifelse(lag(countDaysNextGameTeam) == 0, TRUE, FALSE)
+        ) %>%
+  ungroup()%>%
+  
+  mutate(
+    plusminusTeam=NA,
+    
+    outcomeGame_home=NA
+        )
           
 # merge upcoming games and previous games         
 all_games<-sch%>%
@@ -422,6 +427,7 @@ all_games<-all_games%>%
                           FUN = function(x) mean(x[-31], na.rm = TRUE), 
                           align = "right", 
                           fill = NA))
+# Filter for today's games
 next_games<-all_games%>%
   filter(dateGame == today())%>%
   cbind(location=next_games$location)
@@ -451,7 +457,6 @@ set.seed(245814)
 
 x.next = as.matrix(select(model_games_next,avg_30_pm_diff,isB2BSecond_away,isB2BSecond_home))
 y.next = as.matrix(model_games_next$outcomeGame_home)
-
 
 # fit test data to model
 pred_next<-predict(xg_game_b2b,x.next)
