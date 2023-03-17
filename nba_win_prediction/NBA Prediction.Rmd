@@ -398,45 +398,77 @@ countDaysNextGameTeam =
         ungroup()%>%
   mutate(plusminusTeam=NA,outcomeGame_home=NA)
 
-#home Advantage Feature
-  away_next<-filter(sch, str_detect(location, paste("nameTeamAway")))
-  home_next<-filter(sch, str_detect(location, paste("nameTeamHome")))
-
-merge_games_next<-full_join(home_next,away_next,by='idGame',suffix = c("_home", "_away"))
-          
-          
-next_games<-sch%>%
+next_games<- sch%>%
   select(nameTeam,idGame,dateGame,slugTeams,location,isB2BSecond,plusminusTeam,outcomeGame)%>%
   filter(dateGame==today())
-  union(games_b2b)
-      view(merge_games_next)
-      view(next_games)
+          
+# merge upcoming games and previous games         
+all_games<-sch%>%
+  select(nameTeam,idGame,dateGame,slugTeams,isB2BSecond,plusminusTeam,outcomeGame)%>%
+  filter(dateGame==today())%>%
+  rename(slugMatchup=slugTeams)%>%
+  union(games_b2b)%>%
+  arrange(dateGame)
+
 ```
 
 Engineer team performance metric
 ```{r}
 #Rolling average of plusminus score, 30 games before the current matchup
-games<-games%>%
+all_games<-all_games%>%
   group_by(nameTeam)%>%
   mutate(avg_30_pm = rollapply(data = plusminusTeam, 
                           width = 31, 
                           FUN = function(x) mean(x[-31], na.rm = TRUE), 
                           align = "right", 
                           fill = NA))
-# Home Advantage feature
-away<-filter(games, str_detect(slugMatchup, paste("@", collapse="|")))
-home<-filter(games, str_detect(slugMatchup, paste("vs", collapse="|")))
+next_games<-all_games%>%
+  filter(dateGame == today())%>%
+  cbind(location=next_games$location)
+  
+#home Advantage Feature
+away_next<-filter(next_games, str_detect(location, paste("nameTeamAway")))
+home_next<-filter(next_games, str_detect(location, paste("nameTeamHome")))
 
-merge_games<-full_join(home,away,by='idGame',suffix = c("_home", "_away"))
+merge_games_next<-full_join(home_next,away_next,by='idGame',suffix = c("_home", "_away"))
 
 # Comparison of plusminus between matchups
-merge_games<-merge_games%>%
+merge_games_next<-merge_games_next%>%
   mutate(avg_30_pm_diff = avg_30_pm_home - avg_30_pm_away)
 
 # select outcome and plusminus diff for predicting home team outcome
-model_games <- select(merge_games, outcomeGame_home, avg_30_pm_diff)%>%
-  drop_na()
+model_games_next <- select(merge_games_next, outcomeGame_home, avg_30_pm_diff,isB2BSecond_home,isB2BSecond_away)
 
 #change outcome into numerical (1,0)
-model_games<- mutate(model_games,outcomeGame_home = recode(outcomeGame_home, W=1, L=0))
+model_games_next<- mutate(model_games_next,outcomeGame_home = recode(outcomeGame_home, W=1, L=0))
+
+```
+
+Predict today's game outcomes using the model
+
+```{r}
+set.seed(245814)
+
+x.next = as.matrix(select(model_games_next,avg_30_pm_diff,isB2BSecond_away,isB2BSecond_home))
+y.next = as.matrix(model_games_next$outcomeGame_home)
+
+
+# fit test data to model
+pred_next<-predict(xg_game_b2b,x.next)
+print(head(pred_next))
+
+#transform win probabilities into binary
+prediction_next<- as.numeric(pred_next>0.5)
+print(prediction_next)
+
+#Compile predictions and game info 
+merge_predicted_next<-cbind(merge_games_next,prediction_next)
+results<- merge_predicted_next %>%
+  select(idGame,nameTeam_home,nameTeam_away,dateGame_home,prediction_next,avg_30_pm_diff,isB2BSecond_home,isB2BSecond_away)%>%
+  rename(predicted_outcome_home=prediction_next)%>%
+  rename(dateGame=dateGame_home)%>%
+  mutate(predicted_outcome_home = recode(predicted_outcome_home, `1`='W', `0`='L'))
+
+view(results)
+
 ```
