@@ -10,6 +10,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r}
+Sys.setenv("VROOM_CONNECTION_SIZE" = 131072 * 2)
 devtools::install_github("abresler/nbastatR")
 library(nbastatR)
 library(tidyverse)
@@ -33,7 +34,7 @@ all_games_df<-game_logs(
 
 na.omit(all_games_df)
 ```
-Game Logs
+2022-2023 Game Logs
 ```{r}
 games_df<-game_logs(
   seasons = 2023,
@@ -47,7 +48,6 @@ games_df<-game_logs(
 
 games<-select(games_df,nameTeam, idGame,dateGame,slugMatchup,outcomeGame,plusminusTeam)%>%
   arrange(dateGame)
-
 str(games)
 ```
 
@@ -68,7 +68,6 @@ home<-filter(games, str_detect(slugMatchup, paste("vs", collapse="|")))
 merge_games<-full_join(home,away,by='idGame',suffix = c("_home", "_away"))
 
 # Comparison of plusminus between matchups
-
 merge_games<-merge_games%>%
   mutate(avg_30_pm_diff = avg_30_pm_home - avg_30_pm_away)
 
@@ -82,8 +81,7 @@ model_games<- mutate(model_games,outcomeGame_home = recode(outcomeGame_home, W=1
 
 ```{r}
 
-#split model into train/test set
-
+#split model into train/test set(75%/25%)
 shuffle = function(X){
   new.order = sample.int(length(X))
   new.X = X[new.order]
@@ -91,7 +89,6 @@ shuffle = function(X){
 }
 
 set.seed(245814)
-# Split data into train and test sets (75%/25%)
 n = nrow(model_games)
 n.train = floor(n * 0.75) #round down
 n.valid = n - n.train
@@ -107,10 +104,7 @@ dtrain = xgb.DMatrix(data=x.train,label=y.train)
 x.valid = as.matrix(data.valid$avg_30_pm_diff)
 y.valid = as.matrix(data.valid$outcomeGame_home)
 
-## Tune hyper Parameters
-
-#library(ParBayesianOptimization)
-
+## Tune hyper Parameters ##
 Folds <- list(
     Fold1 = as.integer(seq(1,nrow(dtrain),by = 3))
   , Fold2 = as.integer(seq(2,nrow(dtrain),by = 3))
@@ -179,7 +173,6 @@ xg_game<-xgboost(data = dtrain,max_depth=5,eta=0.3814,min_child_weight = 17.66,s
 
 # fit test data to model
 pred<-predict(xg_game,x.valid)
-
 print(head(pred))
 
 #transform win probabilities into binary
@@ -245,7 +238,6 @@ home<-filter(games_b2b, str_detect(slugMatchup, paste("vs", collapse="|")))
 merge_games_b2b<-full_join(home,away,by='idGame',suffix = c("_home", "_away"))
 
 # Comparison of plusminus between matchups
-
 merge_games_b2b<-merge_games_b2b%>%
   mutate(avg_30_pm_diff = avg_30_pm_home - avg_30_pm_away)
 
@@ -259,9 +251,7 @@ model_games_b2b<- mutate(model_games_b2b,outcomeGame_home = recode(outcomeGame_h
 
 
 ```{r}
-#split model into train/test set
-
-
+# Split data into train and test sets (75%/25%)
 set.seed(245814)
 
 shuffle = function(X){
@@ -269,7 +259,7 @@ shuffle = function(X){
   new.X = X[new.order]
   return(new.X)
 }
-# Split data into train and test sets (75%/25%)
+
 n = nrow(model_games_b2b)
 n.train = floor(n * 0.75) #round down
 n.valid = n - n.train
@@ -286,8 +276,6 @@ x.valid_b2b = as.matrix(select(data.valid_b2b,avg_30_pm_diff,isB2BSecond_away,is
 y.valid_b2b = as.matrix(data.valid_b2b$outcomeGame_home)
 
 ## Tune hyper Parameters
-#library(ParBayesianOptimization)
-
 Folds <- list(
     Fold1 = as.integer(seq(1,nrow(dtrain_b2b),by = 3))
   , Fold2 = as.integer(seq(2,nrow(dtrain_b2b),by = 3))
@@ -354,8 +342,8 @@ Subsample : 0.5924284
 xg_game_b2b<-xgboost(data = dtrain_b2b,max_depth=9,eta=0.09406006,min_child_weight = 15.6273,subsample = 0.5924284,nrounds=10000,
                objective = "binary:logistic",early_stopping_rounds = 50, verbose = 2)
 
+# fit test data to model
 pred_b2b<-predict(xg_game_b2b,x.valid_b2b)
-
 print(head(pred_b2b))
 
 #transform win probabilities into binary
@@ -373,3 +361,14 @@ get.MSPE(y.valid_b2b,prediction_b2b)
 Mean Square Prediction Error = 0.397
 On average this model predicted the correct outcome 60.3% of the time which is a
 significant increase over the previous model
+
+
+```{r}
+
+sch<-current_schedule()
+next_games<-sch%>%
+  select(nameTeamHome,nameTeamAway, idGame,dateGame)%>%
+  filter(dateGame==today())
+
+
+```
