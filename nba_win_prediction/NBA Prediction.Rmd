@@ -5,8 +5,9 @@ date: "2023-03-13"
 output: html_document
 ---
 
-```{r setup, include=FALSE}
+```{r setup,include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+
 ```
 
 ```{r}
@@ -337,7 +338,7 @@ Min Child Weight : 15.6273
 Subsample : 0.5924284
 
 ```{r}
-
+set.seed(245814)
 # train model 
 xg_game_b2b<-xgboost(data = dtrain_b2b,max_depth=9,eta=0.09406006,min_child_weight = 15.6273,subsample = 0.5924284,nrounds=10000,
                objective = "binary:logistic",early_stopping_rounds = 50, verbose = 2)
@@ -366,9 +367,76 @@ significant increase over the previous model
 ```{r}
 
 sch<-current_schedule()
+
+# add B2B variable
+sch<-gather(sch,key="location",value = "nameTeam",nameTeamHome,nameTeamAway)
+
+
+
+sch<-sch%>%
+  group_by(nameTeam) %>%
+  arrange(dateGame)%>%
+mutate(numberGameTeamSeason = 1:n(),
+       countDaysRestTeam = ifelse(numberGameTeamSeason > 1,
+                                     (dateGame - lag(dateGame) - 1),
+                                     120),
+countDaysNextGameTeam =
+            ifelse(numberGameTeamSeason < 82,
+                   ((
+                     lead(dateGame) - dateGame
+                   ) - 1),
+                   120)) %>%
+        mutate(
+          countDaysNextGameTeam = countDaysNextGameTeam %>% as.numeric(),
+          countDaysRestTeam = countDaysRestTeam %>% as.numeric(),
+          isB2B = ifelse(countDaysNextGameTeam == 0 |
+                           countDaysRestTeam == 0, TRUE, FALSE)
+        ) %>%
+        mutate(
+          isB2BFirst = ifelse(lead(countDaysNextGameTeam) == 0, TRUE, FALSE),
+          isB2BSecond = ifelse(lag(countDaysNextGameTeam) == 0, TRUE, FALSE)) %>%
+        ungroup()%>%
+  mutate(plusminusTeam=NA,outcomeGame_home=NA)
+
+#home Advantage Feature
+  away_next<-filter(sch, str_detect(location, paste("nameTeamAway")))
+  home_next<-filter(sch, str_detect(location, paste("nameTeamHome")))
+
+merge_games_next<-full_join(home_next,away_next,by='idGame',suffix = c("_home", "_away"))
+          
+          
 next_games<-sch%>%
-  select(nameTeamHome,nameTeamAway, idGame,dateGame)%>%
+  select(nameTeam,idGame,dateGame,slugTeams,location,isB2BSecond,plusminusTeam,outcomeGame)%>%
   filter(dateGame==today())
+  union(games_b2b)
+      view(merge_games_next)
+      view(next_games)
+```
 
+Engineer team performance metric
+```{r}
+#Rolling average of plusminus score, 30 games before the current matchup
+games<-games%>%
+  group_by(nameTeam)%>%
+  mutate(avg_30_pm = rollapply(data = plusminusTeam, 
+                          width = 31, 
+                          FUN = function(x) mean(x[-31], na.rm = TRUE), 
+                          align = "right", 
+                          fill = NA))
+# Home Advantage feature
+away<-filter(games, str_detect(slugMatchup, paste("@", collapse="|")))
+home<-filter(games, str_detect(slugMatchup, paste("vs", collapse="|")))
 
+merge_games<-full_join(home,away,by='idGame',suffix = c("_home", "_away"))
+
+# Comparison of plusminus between matchups
+merge_games<-merge_games%>%
+  mutate(avg_30_pm_diff = avg_30_pm_home - avg_30_pm_away)
+
+# select outcome and plusminus diff for predicting home team outcome
+model_games <- select(merge_games, outcomeGame_home, avg_30_pm_diff)%>%
+  drop_na()
+
+#change outcome into numerical (1,0)
+model_games<- mutate(model_games,outcomeGame_home = recode(outcomeGame_home, W=1, L=0))
 ```
