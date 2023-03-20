@@ -36,7 +36,9 @@ The fully trained model predicted the correct outcome 60.3% of the time, a signi
 
 5. Usage
 
-I wanted to test my model on upcoming games, using the nbastatR function current_schedule() I created a script that pulls games from the current day, formats them to match the past game logs, and runs the data through the predictive model. I am currently waiting to see how the predicted outcomes align with the actual outcomes in today's games (2023-03-17).
+I wanted to test my model on upcoming games, using the nbastatR function current_schedule() I created a script that pulls games from the current day, formats them to match the past game logs, and runs the data through the predictive model. I am currently waiting to see how the predicted outcomes align with the actual outcomes in today's games (2023-03-17). 
+  UPDATE: The model correctly predicted the outcome of all 8 games.
+
 
 Thanks for reading!
 Gareth
