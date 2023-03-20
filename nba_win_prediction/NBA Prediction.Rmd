@@ -371,6 +371,7 @@ Setup compatible dataframe of new matchup data (2023-03-17)
 
 sch<-current_schedule()
 
+
 # add B2B variable
 sch<-gather(sch,key="location",value = "nameTeam",nameTeamHome,nameTeamAway)
 
@@ -404,7 +405,7 @@ sch<-sch%>%
   mutate(
     plusminusTeam=NA,
     
-    outcomeGame_home=NA
+    outcomeGame=NA
         )
           
 # merge upcoming games and previous games         
@@ -428,9 +429,13 @@ all_games<-all_games%>%
                           align = "right", 
                           fill = NA))
 # Filter for today's games
+today_games<-sch%>%
+  filter(dateGame == today())
+
+#Bind location data to today's games
 next_games<-all_games%>%
   filter(dateGame == today())%>%
-  cbind(location=next_games$location)
+  cbind(location=today_games$location)
   
 #home Advantage Feature
 away_next<-filter(next_games, str_detect(location, paste("nameTeamAway")))
@@ -476,4 +481,9 @@ results<- merge_predicted_next %>%
 
 view(results)
 
+
+#Store daily Results
+
+`2023-03-17`<-results
+`2023-03-20`<-results
 ```
