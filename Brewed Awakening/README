@@ -1,0 +1,5 @@
+Brewed Awakening - Menu Optimization Analysis
+A data-driven menu analysis for a campus coffee shop, tasked with reducing a 22-item menu to an optimal 10–12 items. Items were evaluated across four dimensions
+[contribution margin, preparation time, demand volume, and demand stability (measured via Coefficient of Variation) ] to identify the highest-value offerings and inform a streamlined, operationally efficient menu.
+Built as part of BUSI 414.
+Data courtesy of Alym Almani.
